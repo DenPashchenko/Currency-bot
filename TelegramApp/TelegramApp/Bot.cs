@@ -9,7 +9,6 @@ using Telegram.Bot.Types;
 using TelegramApp.Helpers;
 using TelegramApp.Properties;
 using TelegramApp.Services.Interfaces;
-using TelegramApp.Services;
 
 namespace TelegramApp
 {
@@ -19,20 +18,27 @@ namespace TelegramApp
         private readonly ICurrencyRateService _rateService;
         private readonly DateTime _startDate;
         private ConcurrentDictionary<long, UserState> _userStates;
+        private readonly ITelegramBotClient _bot;
+        private string _rateString;
 
-        public Bot(IConfiguration config)
+        public ConcurrentDictionary<long, UserState> UserStates => _userStates;
+        public string RateString => _rateString;
+
+        public Bot(IConfiguration config, ITelegramBotClient bot, ICurrencyRateService rateService)
         {
             ArgumentNullException.ThrowIfNull(config);
+            ArgumentNullException.ThrowIfNull(bot);
+            ArgumentNullException.ThrowIfNull(rateService);
 
             _config = config;
-            _rateService = new CurrencyRateService();
+            _bot = bot;
+            _rateService = rateService;
             _startDate = DateTime.Parse(config["StartDate"]);
             _userStates = new();
         }
 
         public async Task StartAsync()
         {
-            ITelegramBotClient bot = new TelegramBotClient(_config["BotToken"]);
             CancellationTokenSource cts = new();
             var cancellationToken = cts.Token;
 
@@ -40,20 +46,20 @@ namespace TelegramApp
             {
                 AllowedUpdates = { }
             };
-            bot.StartReceiving(
+            _bot.StartReceiving(
                 HandleUpdateAsync,
                 HandleErrorAsync,
                 receiverOptions,
                 cancellationToken
             );
-            var me = await bot.GetMeAsync();
+            var me = await _bot.GetMeAsync();
             Console.WriteLine($"Start listening for @{me.Username}");
 
             Console.ReadLine();
             cts.Cancel();
         }
 
-        private async Task HandleUpdateAsync(ITelegramBotClient botClient, Update update, CancellationToken cancellationToken)
+        public async Task HandleUpdateAsync(ITelegramBotClient botClient, Update update, CancellationToken cancellationToken)
         {
             if (update.Type == UpdateType.Message)
             {
@@ -130,15 +136,16 @@ namespace TelegramApp
                                     var rate = result.ExchangeRate.FirstOrDefault(r => r.Currency == state.CurrencyCode);
                                     if (rate != null)
                                     {
-                                        var rateString = string.Format(Resources.RateStringBase, rate.BaseCurrency, rate.Currency, result.Date);
-                                        rateString += string.Format(Resources.Rates, rate.PurchaseRate, rate.SaleRate, rate.PurchaseRateNB, rate.SaleRateNB);
+                                        _rateString = string.Format(Resources.RateStringBase, rate.BaseCurrency, rate.Currency, result.Date);
+                                        _rateString += string.Format(Resources.Rates, rate.PurchaseRate, rate.SaleRate, rate.PurchaseRateNB, rate.SaleRateNB);
 
-                                        await botClient.SendTextMessageAsync(message.Chat, rateString, ParseMode.Markdown);
+                                        await botClient.SendTextMessageAsync(message.Chat, _rateString, ParseMode.Markdown);
                                     }
                                     else
                                     {
+                                        _rateString = string.Format(Resources.NotFoundRate, state.CurrencyCode, result.Date);
                                         await botClient.SendTextMessageAsync(message.Chat,
-                                                                             string.Format(Resources.NotFoundRate, state.CurrencyCode, result.Date),
+                                                                             _rateString,
                                                                              ParseMode.Markdown);
                                     }
 
@@ -176,6 +183,5 @@ namespace TelegramApp
         {
             Console.WriteLine(JsonConvert.SerializeObject(exception));
         }
-
     }
 }
